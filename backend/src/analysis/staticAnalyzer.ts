@@ -519,10 +519,12 @@ function analyzeWhileLoopBound(loop: LoopNode, context: TimeContext): BoundAnaly
     if (sqrtProduct && hasIncrement(bodyTexts, sqrtProduct[1])) {
       const base = expressionTerm(sqrtProduct[2], context);
       if (base.kind === 'known' && base.logPower === 0) {
+        const sqrtTerm = knownTerm(base.nPower * 0.5, 0, `Line ${loop.lineNumber}: '${part}' with ${sqrtProduct[1]} += constant is a square-root loop.`);
+        sqrtTerm.notes.push(...base.notes);
         return {
-          term: knownTerm(base.nPower * 0.5, 0, `Line ${loop.lineNumber}: '${part}' with ${sqrtProduct[1]} += constant is a square-root loop.`),
+          term: sqrtTerm,
           variableName: sqrtProduct[1],
-          loopVariableMax: knownTerm(base.nPower * 0.5),
+          loopVariableMax: sqrtTerm,
           explanation: `Line ${loop.lineNumber}: condition '${part}' gives ${termToHuman(knownTerm(base.nPower * 0.5))} iterations.`
         };
       }
@@ -532,10 +534,12 @@ function analyzeWhileLoopBound(loop: LoopNode, context: TimeContext): BoundAnaly
     if (sqrtFunction && hasIncrement(bodyTexts, sqrtFunction[1])) {
       const base = expressionTerm(sqrtFunction[2], context);
       if (base.kind === 'known' && base.logPower === 0) {
+        const sqrtTerm = knownTerm(base.nPower * 0.5, 0, `Line ${loop.lineNumber}: '${part}' is bounded by a square root.`);
+        sqrtTerm.notes.push(...base.notes);
         return {
-          term: knownTerm(base.nPower * 0.5, 0, `Line ${loop.lineNumber}: '${part}' is bounded by a square root.`),
+          term: sqrtTerm,
           variableName: sqrtFunction[1],
-          loopVariableMax: knownTerm(base.nPower * 0.5),
+          loopVariableMax: sqrtTerm,
           explanation: `Line ${loop.lineNumber}: condition '${part}' gives ${termToHuman(knownTerm(base.nPower * 0.5))} iterations.`
         };
       }
@@ -622,6 +626,17 @@ function termToHuman(term: InternalTerm): string {
   return termToComplexityValue(term).replace('Unable to determine automatically', 'an unknown number of');
 }
 
+function rememberSimpleAssignment(statement: StatementNode, context: TimeContext): void {
+  const assignment = statement.text.match(/^([A-Za-z_]\w*)\s*=\s*(.+)$/);
+  if (!assignment) return;
+
+  const [, variable, expression] = assignment;
+  const term = expressionTerm(expression, context);
+  if (term.kind === 'known') {
+    context.loopVariables.set(variable, term);
+  }
+}
+
 function statementCost(statement: StatementNode, context: TimeContext): InternalTerm {
   const text = statement.text;
 
@@ -689,6 +704,7 @@ function analyzeNodes(nodes: ParsedNode[], context: TimeContext, notes: string[]
 
   for (const node of nodes) {
     if (node.type === 'statement') {
+      rememberSimpleAssignment(node, context);
       const cost = statementCost(node, context);
       if (cost.kind !== 'known' || cost.nPower > 0 || cost.logPower > 0) {
         notes.push(...cost.notes);

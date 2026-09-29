@@ -33,3 +33,6 @@ __pycache__/
 # Temporary files
 .tmp/
 tmp/
+
+# TypeScript incremental files
+*.tsbuildinfo

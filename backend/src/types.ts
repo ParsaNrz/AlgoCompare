@@ -3,6 +3,7 @@ export type ComplexityValue =
   | 'O(log n)'
   | 'O(√n)'
   | 'O(n)'
+  | 'O(n log log n)'
   | 'O(n log n)'
   | 'O(n√n)'
   | 'O(n²)'
@@ -17,10 +18,13 @@ export interface ComplexityEstimate {
   notes: string[];
 }
 
+export type ParameterKind = 'scalar-integer' | 'array' | 'string' | 'unknown';
+
 export interface StaticAnalysis {
   label: 'A' | 'B';
   functionName: string | null;
   parameters: string[];
+  parameterKinds: Record<string, ParameterKind>;
   parameterCount: number;
   returnCount: number;
   loopCount: number;

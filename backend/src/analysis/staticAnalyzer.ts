@@ -1,4 +1,4 @@
-import { ComplexityEstimate, ComplexityValue, StaticAnalysis } from '../types';
+import { ComplexityEstimate, ComplexityValue, ParameterKind, StaticAnalysis } from '../types';
 
 const UNKNOWN_COMPLEXITY: ComplexityEstimate = {
   time: 'Unable to determine automatically',
@@ -398,6 +398,55 @@ function hasMembershipOperator(cleanCode: string): boolean {
     const trimmed = line.trim();
     return !trimmed.startsWith('for ') && /\b\w+\s+in\s+\w+/.test(trimmed);
   });
+}
+
+function detectParameterKinds(cleanCode: string, parameters: string[]): Record<string, ParameterKind> {
+  const kinds: Record<string, ParameterKind> = {};
+
+  for (const parameter of parameters) {
+    const escaped = escapeRegExp(parameter);
+    const lower = parameter.toLowerCase();
+    let numericScore = /^(n|m|k|x|limit|count|size|num|number|integer|value)$/.test(lower) ? 2 : 0;
+    let arrayScore = /(arr|array|nums|xs|numbers|list|values|items|sequence|data)/.test(lower) ? 2 : 0;
+    let stringScore = /^(s|str|string|text|word|sentence)$/.test(lower) ? 2 : 0;
+
+    const directRangeUse = new RegExp(`range\\s*\\([^\\)]*(?<!len\\()\\b${escaped}\\b`).test(cleanCode);
+    const numericComparison = new RegExp(`\\b${escaped}\\b\\s*(?:<|<=|>|>=|==|!=)\\s*-?\\d|(?:<|<=|>|>=|==|!=)\\s*\\b${escaped}\\b`).test(cleanCode);
+    const arithmeticUse = new RegExp(`\\b${escaped}\\b\\s*(?:\\+|-|\\*|/|//|%|\\*\\*)|(?:\\+|-|\\*|/|//|%|\\*\\*)\\s*\\b${escaped}\\b`).test(cleanCode);
+    const listSizeUse = new RegExp(`\\[[^\\]]*\\]\\s*\\*\\s*\\(?\\s*\\b${escaped}\\b`).test(cleanCode);
+    const whileBoundUse = new RegExp(`while[^:\\n]*\\b${escaped}\\b[^:\\n]*:`).test(cleanCode);
+
+    if (directRangeUse) numericScore += 3;
+    if (numericComparison) numericScore += 2;
+    if (arithmeticUse) numericScore += 1;
+    if (listSizeUse) numericScore += 3;
+    if (whileBoundUse) numericScore += 2;
+
+    const iteratedDirectly = new RegExp(`for\\s+.+?\\s+in\\s+${escaped}\\b`).test(cleanCode);
+    const lenUse = new RegExp(`len\\s*\\(\\s*${escaped}\\s*\\)`).test(cleanCode);
+    const indexedUse = new RegExp(`\\b${escaped}\\s*\\[`).test(cleanCode);
+    const arrayBuiltinUse = new RegExp(`\\b(?:sorted|sum|max|min|list|set)\\s*\\(\\s*${escaped}\\s*\\)`).test(cleanCode);
+
+    if (iteratedDirectly) arrayScore += 3;
+    if (lenUse) arrayScore += 2;
+    if (indexedUse) arrayScore += 2;
+    if (arrayBuiltinUse) arrayScore += 2;
+
+    const stringMethodUse = new RegExp(`\\b${escaped}\\s*\\.\\s*(?:split|lower|upper|strip|replace|startswith|endswith|find)\\s*\\(`).test(cleanCode);
+    if (stringMethodUse) stringScore += 3;
+
+    if (numericScore > arrayScore && numericScore >= stringScore && numericScore > 0) {
+      kinds[parameter] = 'scalar-integer';
+    } else if (arrayScore > 0 && arrayScore >= stringScore) {
+      kinds[parameter] = 'array';
+    } else if (stringScore > 0) {
+      kinds[parameter] = 'string';
+    } else {
+      kinds[parameter] = 'unknown';
+    }
+  }
+
+  return kinds;
 }
 
 function iterableTerm(iterable: string, context: TimeContext): InternalTerm {
@@ -803,6 +852,50 @@ function analyzeSpaceComplexity(cleanCode: string, hasRecursion: boolean): { spa
   return { space, notes };
 }
 
+function detectSieveOfEratosthenes(cleanCode: string, parameters: string[]): ComplexityEstimate | null {
+  const escapedParameters = parameters.map(escapeRegExp);
+  const parameterAlternation = escapedParameters.length > 0 ? escapedParameters.join('|') : '[A-Za-z_]\\w*';
+
+  const booleanArrayMatch = cleanCode.match(
+    new RegExp(`^\\s*([A-Za-z_]\\w*)\\s*=\\s*\\[\\s*(?:True|False)\\s*\\]\\s*\\*\\s*\\(?\\s*(${parameterAlternation})\\b`, 'm')
+  );
+  if (!booleanArrayMatch) return null;
+
+  const [, markerArray, limitParameter] = booleanArrayMatch;
+  const outerMatch = cleanCode.match(
+    new RegExp(`while\\s+([A-Za-z_]\\w*)\\s*\\*\\s*\\1\\s*(?:<=|<)\\s*${escapeRegExp(limitParameter)}\\s*:`)
+  );
+  if (!outerMatch) return null;
+
+  const candidate = outerMatch[1];
+  const escapedArray = escapeRegExp(markerArray);
+  const escapedCandidate = escapeRegExp(candidate);
+  const guardedByCandidatePrime = new RegExp(`if\\s+${escapedArray}\\s*\\[\\s*${escapedCandidate}\\s*\\]\\s*:`).test(cleanCode);
+  const innerLoopMatch = cleanCode.match(
+    new RegExp(
+      `for\\s+([A-Za-z_]\\w*)\\s+in\\s+range\\s*\\(\\s*${escapedCandidate}\\s*\\*\\s*${escapedCandidate}\\s*,\\s*${escapeRegExp(limitParameter)}(?:\\s*\\+\\s*1)?\\s*,\\s*${escapedCandidate}\\s*\\)\\s*:`
+    )
+  );
+  if (!guardedByCandidatePrime || !innerLoopMatch) return null;
+
+  const multiple = innerLoopMatch[1];
+  const marksMultiples = new RegExp(`\\b${escapedArray}\\s*\\[\\s*${escapeRegExp(multiple)}\\s*\\]\\s*=\\s*False\\b`).test(cleanCode);
+  const incrementsCandidate = new RegExp(`\\b${escapedCandidate}\\s*\\+=\\s*1\\b|\\b${escapedCandidate}\\s*=\\s*${escapedCandidate}\\s*\\+\\s*1\\b`).test(cleanCode);
+
+  if (!marksMultiples || !incrementsCandidate) return null;
+
+  return {
+    time: 'O(n log log n)',
+    space: 'O(n)',
+    confidence: 'high',
+    notes: [
+      'Recognized the Sieve of Eratosthenes pattern: marking multiples of candidate primes gives O(n log log n) time and O(n) space.',
+      `Detected boolean marker array '${markerArray}', candidate '${candidate}', and multiples loop stepping by '${candidate}'.`,
+      'This is a pattern-based recognition for an educational MVP, not a formal proof.'
+    ]
+  };
+}
+
 function estimateRecursiveComplexity(cleanCode: string, functionName: string): ComplexityEstimate | null {
   const escapedName = escapeRegExp(functionName);
   const recursiveCalls = Math.max(0, countMatches(cleanCode, new RegExp(`\\b${escapedName}\\s*\\(`, 'g')) - 1);
@@ -848,6 +941,9 @@ function estimateComplexity(
     };
   }
 
+  const sieveEstimate = detectSieveOfEratosthenes(cleanCode, analysisBits.parameters);
+  if (sieveEstimate) return sieveEstimate;
+
   if (analysisBits.hasRecursion) {
     const recursiveEstimate = estimateRecursiveComplexity(cleanCode, analysisBits.functionName);
     if (recursiveEstimate) return recursiveEstimate;
@@ -890,6 +986,7 @@ function estimateComplexity(
 export function analyzeCode(code: string, label: 'A' | 'B'): StaticAnalysis {
   const cleanCode = stripStringsAndComments(code);
   const { name: functionName, parameters } = findFirstFunction(code);
+  const parameterKinds = detectParameterKinds(cleanCode, parameters);
   const returnCount = countMatches(cleanCode, /^\s*return\b/gm);
   const loopCount = countMatches(cleanCode, /^\s*(for|while)\b/gm);
   const hasNestedLoops = detectNestedLoops(cleanCode);
@@ -899,8 +996,10 @@ export function analyzeCode(code: string, label: 'A' | 'B'): StaticAnalysis {
   const hasRecursion = Boolean(
     functionName && Math.max(0, countMatches(cleanCode, new RegExp(`\\b${escapeRegExp(functionName)}\\s*\\(`, 'g')) - 1) > 0
   );
+  const isSieve = Boolean(detectSieveOfEratosthenes(cleanCode, parameters));
 
   const patterns: string[] = [];
+  if (isSieve) patterns.push('Sieve of Eratosthenes');
   if (loopCount > 0) patterns.push(loopCount === 1 ? 'loop' : `${loopCount} loops`);
   if (hasNestedLoops) patterns.push('nested loops');
   if (hasRecursion) patterns.push('recursion');
@@ -930,6 +1029,7 @@ export function analyzeCode(code: string, label: 'A' | 'B'): StaticAnalysis {
     label,
     functionName,
     parameters,
+    parameterKinds,
     parameterCount: parameters.length,
     returnCount,
     loopCount,

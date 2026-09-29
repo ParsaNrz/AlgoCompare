@@ -1,4 +1,4 @@
-import { GeneratedTests, StaticAnalysis, TestCase } from '../types';
+import { GeneratedTests, ParameterKind, StaticAnalysis, TestCase } from '../types';
 
 interface GeneratorOptions {
   analysisA: StaticAnalysis;
@@ -36,18 +36,38 @@ function codeText(analysis: StaticAnalysis): string {
   return [analysis.functionName, ...analysis.parameters, ...analysis.patterns].join(' ').toLowerCase();
 }
 
+function primaryParameterKind(analysis: StaticAnalysis): ParameterKind | undefined {
+  const firstParameter = analysis.parameters[0];
+  return firstParameter ? analysis.parameterKinds?.[firstParameter] : undefined;
+}
+
 function looksArrayBased(analysis: StaticAnalysis): boolean {
   const text = codeText(analysis);
+  const primaryKind = primaryParameterKind(analysis);
+
+  if (primaryKind === 'array') return true;
+  if (primaryKind === 'scalar-integer') return false;
+
   return (
     /(arr|array|nums|xs|numbers|list|values|items|sequence|data)/.test(text) ||
-    analysis.usesLinearBuiltin ||
     analysis.hasSorting
   );
 }
 
 function looksNumberBased(analysis: StaticAnalysis): boolean {
   const text = codeText(analysis);
-  return /(factorial|fibonacci|fib|number|integer|\bn\b)/.test(text) || analysis.hasRecursion;
+  const primaryKind = primaryParameterKind(analysis);
+
+  if (primaryKind === 'scalar-integer') return true;
+  if (primaryKind === 'array') return false;
+
+  return /(factorial|fibonacci|fib|number|integer|\bn\b|limit|count|size)/.test(text) || analysis.hasRecursion;
+}
+
+function looksStringBased(analysis: StaticAnalysis): boolean {
+  const primaryKind = primaryParameterKind(analysis);
+  if (primaryKind === 'string') return true;
+  return analysis.parameters.some((parameter) => /^(s|str|string|text|word|sentence)$/i.test(parameter));
 }
 
 function mayRejectEmptyArray(analysis: StaticAnalysis): boolean {
@@ -62,16 +82,25 @@ function mayRejectEmptyArray(analysis: StaticAnalysis): boolean {
 
 function chooseProfile(a: StaticAnalysis, b: StaticAnalysis): string {
   const count = Math.max(a.parameterCount, b.parameterCount);
+  const primaryKinds = [primaryParameterKind(a), primaryParameterKind(b)].filter(Boolean);
 
   if (count === 2 && (looksArrayBased(a) || looksArrayBased(b))) {
     return 'array-search';
   }
 
   if (count === 1) {
-    if ((looksNumberBased(a) || looksNumberBased(b)) && !(looksArrayBased(a) || looksArrayBased(b))) {
+    // Prefer explicit scalar detection over generic loop/list patterns. This prevents solve(n)
+    // functions that build a list internally from receiving array arguments such as solve([10]).
+    if (primaryKinds.includes('scalar-integer') || ((looksNumberBased(a) || looksNumberBased(b)) && !(looksArrayBased(a) || looksArrayBased(b)))) {
       return 'single-number';
     }
-    return 'array';
+    if (primaryKinds.includes('array') || looksArrayBased(a) || looksArrayBased(b)) {
+      return 'array';
+    }
+    if (primaryKinds.includes('string') || looksStringBased(a) || looksStringBased(b)) {
+      return 'string';
+    }
+    return 'single-number';
   }
 
   if (count === 0) {
@@ -146,8 +175,10 @@ function addArraySearchTests(cases: TestCase[], count: number, random: () => num
   }
 }
 
-function addNumberTests(cases: TestCase[], count: number, random: () => number): void {
-  const baseNumbers = [0, 1, 2, 3, 4, 5, 8, 10, 12];
+function addNumberTests(cases: TestCase[], count: number, random: () => number, includeLargeBounds: boolean): void {
+  const baseNumbers = includeLargeBounds
+    ? [0, 1, 2, 3, 4, 5, 10, 20, 50, 100, 500, 1000, 5000, 10000]
+    : [0, 1, 2, 3, 4, 5, 8, 10, 12, 14];
 
   for (const value of baseNumbers) {
     if (cases.length >= count) return;
@@ -155,10 +186,23 @@ function addNumberTests(cases: TestCase[], count: number, random: () => number):
   }
 
   while (cases.length < count) {
-    // Keep values small so recursive educational examples such as Fibonacci finish quickly.
-    // Duplicates are allowed here because the safe domain is intentionally small.
-    const value = intBetween(random, 0, 14);
+    // Keep random numeric values moderate. The fixed cases above still include large
+    // bounds for loop-based solve(n) algorithms, while recursive examples stay small.
+    const value = includeLargeBounds ? intBetween(random, 0, 250) : intBetween(random, 0, 14);
     cases.push({ id: cases.length + 1, label: `random n = ${value}`, args: [value] });
+  }
+}
+
+function addStringTests(cases: TestCase[], count: number): void {
+  const baseStrings = ['', 'a', 'racecar', 'algorithm', 'hello world', 'A man a plan a canal Panama'];
+  for (const value of baseStrings) {
+    if (cases.length >= count) return;
+    uniquePush(cases, { id: cases.length + 1, label: `string length ${value.length}`, args: [value] });
+  }
+
+  while (cases.length < count) {
+    const value = `sample-${cases.length}`;
+    cases.push({ id: cases.length + 1, label: `string length ${value.length}`, args: [value] });
   }
 }
 
@@ -203,7 +247,10 @@ export function generateTests({ analysisA, analysisB, requestedCount }: Generato
   } else if (profile === 'array-search') {
     addArraySearchTests(cases, count, random);
   } else if (profile === 'single-number') {
-    addNumberTests(cases, count, random);
+    const includeLargeBounds = !analysisA.hasRecursion && !analysisB.hasRecursion;
+    addNumberTests(cases, count, random, includeLargeBounds);
+  } else if (profile === 'string') {
+    addStringTests(cases, count);
   } else if (profile === 'no-argument') {
     uniquePush(cases, { id: 1, label: 'no arguments', args: [] });
   } else {

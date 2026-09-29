@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { analyzeCode } from './staticAnalyzer';
 import { generateTests } from './testGenerator';
+import { analyzeAlgorithms } from '../services/comparisonService';
 
 const PRIME_NAIVE = `def solve(n):
     primes = []
@@ -27,6 +28,24 @@ const PRIME_SQRT = `def solve(n):
         if is_prime:
             primes.append(x)
     return primes`;
+
+const SIEVE = `def solve(n):
+    if n < 2:
+        return []
+
+    is_prime = [True] * (n + 1)
+    is_prime[0] = False
+    is_prime[1] = False
+
+    p = 2
+
+    while p * p <= n:
+        if is_prime[p]:
+            for multiple in range(p * p, n + 1, p):
+                is_prime[multiple] = False
+        p += 1
+
+    return [i for i in range(2, n + 1) if is_prime[i]]`;
 
 function expectTime(name: string, code: string, expected: string): void {
   const analysis = analyzeCode(code, 'A');
@@ -83,6 +102,9 @@ expectTime(
 
 expectTime('outer n loop with square-root inner loop', PRIME_SQRT, 'O(n√n)');
 
+expectTime('Sieve of Eratosthenes', SIEVE, 'O(n log log n)');
+expectSpace('Sieve of Eratosthenes', SIEVE, 'O(n)');
+
 expectTime(
   'sorting implementation',
   `def solve(arr):
@@ -133,6 +155,31 @@ for (const test of generated.tests) {
   assert.equal(test.args.length, 1, 'prime tests should pass one argument');
   assert.equal(typeof test.args[0], 'number', 'prime tests should use scalar integer n');
 }
-console.log('✓ prime generator inputs are scalar integers and match the function signature');
+const tenCase = generated.tests.find((test) => test.args[0] === 10);
+assert.ok(tenCase, 'solve(10) should be generated for scalar numeric functions');
+assert.deepEqual(tenCase.args, [10], 'the executor argument list should call solve(10), not solve([10])');
+assert.notDeepEqual(tenCase.args, [[10]], 'scalar numeric functions must not receive array-wrapped integers');
+console.log('✓ prime generator inputs are scalar integers and include solve(10), not solve([10])');
 
-console.log('All static analyzer regression tests passed.');
+async function runEquivalenceRegression(): Promise<void> {
+  const result = await analyzeAlgorithms({ codeA: PRIME_NAIVE, codeB: SIEVE, testCount: 12 });
+  assert.equal(result.verdict, 'Likely Equivalent');
+  assert.equal(result.algorithms.A.complexity.time, 'O(n²)');
+  assert.equal(result.algorithms.B.complexity.time, 'O(n log log n)');
+  assert.equal(result.generatedProfile, 'single-number');
+  assert.equal(result.passed, result.total);
+  for (const test of result.tests) {
+    assert.equal(test.input.length, 1, 'equivalence tests should pass one argument');
+    assert.equal(typeof test.input[0], 'number', 'equivalence tests should use scalar n inputs');
+  }
+  console.log('✓ naive prime and sieve implementations are likely equivalent with scalar integer tests');
+}
+
+runEquivalenceRegression()
+  .then(() => {
+    console.log('All static analyzer regression tests passed.');
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

@@ -47,7 +47,7 @@ function describePatternOverlap(a: StaticAnalysis, b: StaticAnalysis): string {
 }
 
 function compareComplexity(a: StaticAnalysis, b: StaticAnalysis): string | null {
-  const order = ['O(1)', 'O(log n)', 'O(n)', 'O(n log n)', 'O(n²)', 'O(2^n)'];
+  const order = ['O(1)', 'O(log n)', 'O(√n)', 'O(n)', 'O(n log n)', 'O(n√n)', 'O(n²)', 'O(n³)', 'O(2^n)'];
   const indexA = order.indexOf(a.complexity.time);
   const indexB = order.indexOf(b.complexity.time);
 

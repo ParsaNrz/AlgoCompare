@@ -24,7 +24,10 @@ function stripStringsAndComments(code: string): string {
 }
 
 function findFirstFunction(code: string): { name: string | null; parameters: string[] } {
-  const match = code.match(/^\s*def\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:/m);
+  // Be intentionally lenient here. The Python sandbox performs real syntax
+  // validation, so this also lets us surface clear SyntaxError messages for
+  // almost-correct definitions such as `def solve(arr)` without a colon.
+  const match = code.match(/^\s*def\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/m);
 
   if (!match) {
     return { name: null, parameters: [] };

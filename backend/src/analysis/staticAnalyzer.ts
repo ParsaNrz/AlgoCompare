@@ -87,6 +87,13 @@ function detectAllocatedLinearSpace(cleanCode: string): boolean {
   );
 }
 
+function hasMembershipOperator(cleanCode: string): boolean {
+  return cleanCode.split('\n').some((line) => {
+    const trimmed = line.trim();
+    return !trimmed.startsWith('for ') && /\b\w+\s+in\s+\w+/.test(trimmed);
+  });
+}
+
 function estimateComplexity(code: string, analysisBits: {
   functionName: string | null;
   loopCount: number;
@@ -171,7 +178,8 @@ export function analyzeCode(code: string, label: 'A' | 'B'): StaticAnalysis {
   const loopCount = countMatches(cleanCode, /^\s*(for|while)\b/gm);
   const hasNestedLoops = detectNestedLoops(cleanCode);
   const hasSorting = /\bsorted\s*\(|\.sort\s*\(/.test(cleanCode);
-  const usesLinearBuiltin = /\b(max|min|sum|any|all)\s*\(|\.index\s*\(|\bin\s+/.test(cleanCode);
+  const membershipOperator = hasMembershipOperator(cleanCode);
+  const usesLinearBuiltin = /\b(max|min|sum|any|all)\s*\(|\.index\s*\(/.test(cleanCode) || membershipOperator;
   const hasRecursion = Boolean(
     functionName && Math.max(0, countMatches(cleanCode, new RegExp(`\\b${escapeRegExp(functionName)}\\s*\\(`, 'g')) - 1) > 0
   );
@@ -183,7 +191,7 @@ export function analyzeCode(code: string, label: 'A' | 'B'): StaticAnalysis {
   if (hasSorting) patterns.push('sorting');
   if (/\b(max|min)\s*\(/.test(cleanCode)) patterns.push('min/max selection');
   if (/\bsum\s*\(/.test(cleanCode)) patterns.push('aggregation');
-  if (/\.index\s*\(|\bin\s+/.test(cleanCode)) patterns.push('search/membership');
+  if (/\.index\s*\(/.test(cleanCode) || membershipOperator) patterns.push('search/membership');
   if (detectAllocatedLinearSpace(cleanCode)) patterns.push('creates additional collection');
 
   const warnings: string[] = [];

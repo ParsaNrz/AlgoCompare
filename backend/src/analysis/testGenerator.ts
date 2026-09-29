@@ -39,8 +39,7 @@ function codeText(analysis: StaticAnalysis): string {
 function looksArrayBased(analysis: StaticAnalysis): boolean {
   const text = codeText(analysis);
   return (
-    /(arr|array|nums|numbers|list|values|items|sequence)/.test(text) ||
-    analysis.loopCount > 0 ||
+    /(arr|array|nums|xs|numbers|list|values|items|sequence|data)/.test(text) ||
     analysis.usesLinearBuiltin ||
     analysis.hasSorting
   );
@@ -157,8 +156,9 @@ function addNumberTests(cases: TestCase[], count: number, random: () => number):
 
   while (cases.length < count) {
     // Keep values small so recursive educational examples such as Fibonacci finish quickly.
+    // Duplicates are allowed here because the safe domain is intentionally small.
     const value = intBetween(random, 0, 14);
-    uniquePush(cases, { id: cases.length + 1, label: `random n = ${value}`, args: [value] });
+    cases.push({ id: cases.length + 1, label: `random n = ${value}`, args: [value] });
   }
 }
 
@@ -175,7 +175,7 @@ function addSmallIntegerTests(cases: TestCase[], count: number, random: () => nu
   });
 
   while (cases.length < count) {
-    uniquePush(cases, {
+    cases.push({
       id: cases.length + 1,
       label: 'random small integers',
       args: Array.from({ length: parameterCount }, () => intBetween(random, -20, 20))
